@@ -43,7 +43,7 @@ The risk score is fully deterministic — each detected pattern adds a fixed con
 
 **Why KYC is mocked.** At investigation time, KYC is a CIF (Customer Information File) lookup of previously-collected onboarding data — not a fresh document/selfie verification. Public KYC APIs (Onfido, Sumsub, Didit) operate on real document images at onboarding, not on synthetic dataset accounts. The mock simulates the CIF response shape; replacing it means swapping in a bank's internal CIF service over mTLS — no agent logic changes.
 
-![alt text](aml_copilot/docs/screenshots/03-sar-draft.png)
+![alt text](docs/screenshots/03-sar-draft.png)
 
 ## Running locally
 
