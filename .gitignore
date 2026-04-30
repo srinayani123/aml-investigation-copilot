@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+
+# Data — too big for GitHub
+data/raw/*.csv
+data/raw/*.txt
+!data/raw/PUT_DATA_HERE.md
+!data/raw/.gitkeep
+
+# Artifacts
+artifacts/*.json
+!artifacts/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
