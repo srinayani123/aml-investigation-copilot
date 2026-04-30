@@ -4,10 +4,11 @@ Design: dense, clean, banking-tool aesthetic. Mirrors how real compliance
 software (Actimize, Mantas, Bloomberg) is laid out — toolbar at top, decision
 strip prominent, supporting evidence in tight tables, status pills not emoji.
 
-Three LLM modes (resolved at request time):
-  1. Visitor key from sidebar  (per-session, never stored, never logged)
-  2. ANTHROPIC_API_KEY env var  (deployment default / Streamlit secret)
-  3. Mock fallback              (no keys, free, templated responses)
+Anthropic LLM is BYOK (bring-your-own-key):
+  - Visitor pastes their key in the sidebar → button enables → app works
+  - Without a key, the Run Investigation button is disabled
+  - Data integrations (OpenSanctions / Tavily / GLEIF) use server-side keys
+    so visitors still see real sanctions / PEP / adverse media / KYB data
 """
 
 from __future__ import annotations
@@ -50,31 +51,17 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 
 def _safe_text(text: str) -> str:
-    """Prepare LLM-generated narrative text for safe markdown rendering.
-
-    1. Escapes `$` so Streamlit/KaTeX doesn't interpret amounts as math.
-    2. Strips redundant top-level markdown headers — the LLMs sometimes
-       prepend `# Title` even when we ask for prose; we render the section
-       label ourselves so the prose stays clean.
-    """
+    """Prepare LLM-generated narrative text for safe markdown rendering."""
     if not text:
         return ""
-    # Escape $ to prevent LaTeX math-mode rendering ($4.5B → \$4.5B)
     out = text.replace("$", "\\$")
-    # Strip a leading top-level markdown header line if the LLM added one
     out = re.sub(r"^\s*#\s+[^\n]*\n", "", out, count=1)
     return out.strip()
 
 
 def _format_agent_name(raw: str) -> str:
-    """Format an agent name like 'sar_drafter' → 'SAR Drafter'.
-
-    Python's .title() naively lowercases letters after the first, so
-    'sar_drafter'.replace('_', ' ').title() → 'Sar Drafter' (wrong).
-    We patch known acronyms after title-casing.
-    """
+    """'sar_drafter' → 'SAR Drafter' (handle acronyms .title() lowercases)."""
     base = raw.replace('_', ' ').title()
-    # Acronym fixups — extend this map if new agents are added.
     return (base
             .replace('Sar', 'SAR')
             .replace('Kyc', 'KYC')
@@ -83,7 +70,6 @@ def _format_agent_name(raw: str) -> str:
 
 
 def _score_severity(score: float) -> str:
-    """Map a 0..1 risk score to a severity bucket name."""
     if score >= 0.6:
         return "high"
     if score >= 0.35:
@@ -91,8 +77,26 @@ def _score_severity(score: float) -> str:
     return "low"
 
 
+def _is_plausible_anthropic_key(key: str) -> bool:
+    """Lightweight format validation. Real validation requires a test API
+    call, but this catches obvious typos and pasted gibberish.
+
+    Accepts:
+      - Strings starting with 'sk-ant-' followed by base64-ish chars
+      - Length at least 40 chars (real keys are ~100+)
+    """
+    if not key or not isinstance(key, str):
+        return False
+    key = key.strip()
+    if not key.startswith("sk-ant-"):
+        return False
+    if len(key) < 40:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
-# CSS — dense banking-tool aesthetic, polished for product-feel
+# CSS — dense banking-tool aesthetic
 # ---------------------------------------------------------------------------
 
 st.markdown("""
@@ -107,7 +111,6 @@ st.markdown("""
     --c-text-muted: #6b6b6b;
     --c-text-faint: #9b9b9b;
     --c-mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
-    /* Severity tokens */
     --c-sev-high: #a32d2d;
     --c-sev-high-bg: #fcebeb;
     --c-sev-med: #c4882b;
@@ -117,21 +120,14 @@ st.markdown("""
 }
 
 .block-container { padding-top: 1.25rem; padding-bottom: 2rem; max-width: 1440px; }
-
 #MainMenu, footer, header { visibility: hidden; }
 [data-testid="stStatusWidget"] { display: none; }
 
-/* Type ramp */
 .aml-label {
     font-size: 10px; text-transform: uppercase; letter-spacing: 0.7px;
     color: var(--c-text-muted); font-weight: 500; margin-bottom: 6px;
 }
-.aml-h2 {
-    font-size: 13px; font-weight: 600; color: var(--c-text);
-    margin: 0 0 4px 0;
-}
 
-/* Top brand strip — small but signals "real product" */
 .aml-brand {
     display: flex; align-items: center; gap: 10px;
     padding-bottom: 10px; margin-bottom: 10px;
@@ -159,20 +155,6 @@ st.markdown("""
     color: var(--c-text-muted);
 }
 
-/* Toolbar (account picker / key stats) */
-.aml-toolbar {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px; background: var(--c-surface);
-    border: 0.5px solid var(--c-border); border-radius: 6px;
-    margin-bottom: 12px; font-size: 13px;
-}
-.aml-toolbar-left { display: flex; align-items: center; gap: 14px; }
-.aml-toolbar-title { font-weight: 600; }
-.aml-toolbar-divider { width: 1px; height: 14px; background: var(--c-border); }
-.aml-toolbar-meta { font-family: var(--c-mono); font-size: 12px; color: var(--c-text-muted); }
-.aml-toolbar-right { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--c-text-muted); }
-
-/* Pills */
 .aml-pill {
     display: inline-block; padding: 3px 11px; border-radius: 999px;
     font-size: 11px; font-weight: 600; letter-spacing: 0.4px;
@@ -183,21 +165,17 @@ st.markdown("""
 .aml-pill-green { background: var(--c-sev-low-bg); color: var(--c-sev-low); }
 .aml-pill-gray { background: #f1efe8; color: #444441; }
 
-/* Dots */
 .aml-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; vertical-align: middle; }
 .aml-dot-green { background: #1d9e75; }
 .aml-dot-amber { background: var(--c-sev-med); }
 .aml-dot-red { background: var(--c-sev-high); }
 .aml-dot-gray { background: #888780; }
 
-/* Cards */
 .aml-card {
     background: var(--c-surface); border: 0.5px solid var(--c-border);
     border-radius: 6px; padding: 14px 16px; margin-bottom: 12px;
 }
-.aml-card-tight { padding: 12px 14px; }
 
-/* Decision strip */
 .aml-decision-row {
     display: flex; align-items: center; gap: 14px; margin-bottom: 12px;
 }
@@ -226,7 +204,6 @@ st.markdown("""
 .aml-reasoning.sev-med { border-left-color: var(--c-sev-med); }
 .aml-reasoning.sev-low { border-left-color: var(--c-sev-low); }
 
-/* Score breakdown bars */
 .aml-bar-row { margin-top: 6px; }
 .aml-bar-label {
     display: flex; justify-content: space-between; font-size: 11px;
@@ -237,7 +214,6 @@ st.markdown("""
 }
 .aml-bar-fill { height: 100%; background: #4a4a4a; }
 
-/* Tables */
 .aml-table { width: 100%; font-size: 12px; border-collapse: collapse; }
 .aml-table td { padding: 7px 0; border-bottom: 0.5px solid var(--c-border); }
 .aml-table tr:last-child td { border-bottom: none; }
@@ -247,7 +223,6 @@ st.markdown("""
     letter-spacing: 0.5px; font-weight: 500;
 }
 
-/* Provenance pills (refined) */
 .aml-prov-row {
     display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
 }
@@ -267,7 +242,6 @@ st.markdown("""
 }
 .aml-prov-name { font-size: 11px; }
 
-/* Footer governance bar */
 .aml-footer {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 14px; background: var(--c-surface-2);
@@ -275,7 +249,64 @@ st.markdown("""
     margin-top: 8px;
 }
 
-/* Streamlit metric overrides */
+/* BYOK gate styles */
+.aml-byok-callout {
+    background: #fffbe9;
+    border: 0.5px solid #ecd99a;
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: #6b5b1e;
+}
+.aml-byok-callout strong { color: #4a3f10; }
+.aml-byok-callout a { color: #6b5b1e; text-decoration: underline; }
+
+.aml-gate-card {
+    background: var(--c-surface);
+    border: 0.5px solid var(--c-border);
+    border-radius: 6px;
+    padding: 28px 32px;
+    margin-bottom: 12px;
+    text-align: center;
+}
+.aml-gate-icon {
+    width: 36px; height: 36px;
+    margin: 0 auto 12px auto;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #1a1a1a 0%, #3a3a3a 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-family: var(--c-mono); font-size: 18px;
+}
+.aml-gate-title {
+    font-size: 14px; font-weight: 600; color: var(--c-text);
+    margin-bottom: 6px;
+}
+.aml-gate-sub {
+    font-size: 12px; color: var(--c-text-muted);
+    line-height: 1.6; max-width: 540px; margin: 0 auto 14px auto;
+}
+.aml-gate-hint {
+    font-size: 11px; color: var(--c-text-faint);
+    margin-top: 8px;
+}
+.aml-gate-arrow {
+    display: inline-block;
+    font-family: var(--c-mono); font-size: 11px;
+    background: var(--c-surface-2);
+    padding: 5px 11px; border-radius: 4px;
+    border: 0.5px solid var(--c-border);
+    color: var(--c-text);
+}
+.aml-gate-error {
+    display: inline-block;
+    font-size: 11.5px; color: var(--c-sev-high);
+    background: var(--c-sev-high-bg);
+    padding: 6px 12px; border-radius: 4px;
+    margin-top: 10px;
+}
+
 [data-testid="stMetric"] { background: transparent; padding: 0; }
 [data-testid="stMetricLabel"] {
     font-size: 10px !important; text-transform: uppercase;
@@ -287,7 +318,6 @@ st.markdown("""
     font-weight: 500 !important; color: var(--c-text) !important;
 }
 
-/* Tabs */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0; border-bottom: 0.5px solid var(--c-border);
 }
@@ -301,14 +331,12 @@ st.markdown("""
     font-weight: 600 !important;
 }
 
-/* Sidebar */
 section[data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
 section[data-testid="stSidebar"] {
     background: var(--c-surface) !important;
     border-right: 0.5px solid var(--c-border);
 }
 
-/* Buttons */
 .stButton > button {
     border-radius: 4px; font-size: 13px; font-weight: 500;
     border: 0.5px solid var(--c-border-strong);
@@ -321,15 +349,17 @@ section[data-testid="stSidebar"] {
     background: #2c2c2e; border-color: #2c2c2e; color: white;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
 }
+.stButton > button:disabled {
+    background: #efefee !important; color: var(--c-text-faint) !important;
+    border-color: var(--c-border) !important; cursor: not-allowed;
+}
 
-/* Narrative prose */
 .aml-prose {
     font-size: 13px; line-height: 1.65; color: var(--c-text);
 }
 .aml-prose strong { color: var(--c-text); font-weight: 600; }
 .aml-prose p { margin: 0 0 10px 0; }
 
-/* SAR draft regulatory list */
 .aml-reg-row {
     display: flex; align-items: center; gap: 8px;
     font-size: 12px; padding: 5px 0;
@@ -382,7 +412,6 @@ def run_with_cache(account: str, store, api_key: Optional[str]):
 # ---------------------------------------------------------------------------
 
 def _prov_pill(key: str, name: str, kind: str) -> str:
-    """Render one provenance pill. kind ∈ {'real', 'mock', 'sim'}."""
     return (f'<span class="aml-prov-pill {kind}">'
             f'<span class="aml-prov-key">{key}</span>'
             f'<span class="aml-prov-name">{name}</span>'
@@ -390,23 +419,15 @@ def _prov_pill(key: str, name: str, kind: str) -> str:
 
 
 def _format_provenance(ds: dict) -> str:
-    """Build the per-source provenance row. Each source becomes a small pill
-    with the API key (Sanctions/PEP/Adverse/KYB/KYC) and provider name."""
     pills = []
-
-    # Sanctions
     if ds.get("sanctions") == "real":
         pills.append(_prov_pill("Sanctions", "OpenSanctions", "real"))
     else:
         pills.append(_prov_pill("Sanctions", "mock", "mock"))
-
-    # PEP
     if ds.get("pep") == "real":
         pills.append(_prov_pill("PEP", "OpenSanctions", "real"))
     else:
         pills.append(_prov_pill("PEP", "mock", "mock"))
-
-    # Adverse media
     adverse_state = ds.get("adverse_media", "mock")
     if adverse_state == "tavily":
         pills.append(_prov_pill("Adverse", "Tavily", "real"))
@@ -414,8 +435,6 @@ def _format_provenance(ds: dict) -> str:
         pills.append(_prov_pill("Adverse", "GDELT", "real"))
     else:
         pills.append(_prov_pill("Adverse", "mock", "mock"))
-
-    # KYB / LEI
     lei_state = ds.get("lei", "n/a")
     if lei_state == "real":
         pills.append(_prov_pill("KYB", "GLEIF", "real"))
@@ -423,10 +442,7 @@ def _format_provenance(ds: dict) -> str:
         pills.append(_prov_pill("KYB", "n/a", "mock"))
     else:
         pills.append(_prov_pill("KYB", "mock", "mock"))
-
-    # KYC — always simulated CIF
     pills.append(_prov_pill("KYC", "CIF (sim)", "sim"))
-
     return f'<div class="aml-prov-row">{"".join(pills)}</div>'
 
 
@@ -435,7 +451,6 @@ def _format_provenance(ds: dict) -> str:
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    # Brand strip in sidebar
     st.markdown("""
 <div class="aml-brand">
   <div class="aml-brand-mark">A</div>
@@ -451,23 +466,65 @@ with st.sidebar:
     visitor_key = st.text_input(
         "Anthropic API key",
         type="password",
-        placeholder="sk-ant-... (optional)",
-        help="Per-session only. Not stored, not logged.",
+        placeholder="sk-ant-...",
+        help=("Required to run investigations. Per-session only — never "
+              "stored, never logged. Get a free key at console.anthropic.com."),
         key="visitor_api_key",
     )
 
-    active_mode = get_active_mode(runtime_api_key=visitor_key)
-    if active_mode == "real" and visitor_key:
+    # Validate the key format. Three states:
+    #   key_present + valid_format → user can run
+    #   key_present + invalid_format → show error, block
+    #   no_key → show BYOK callout, block
+    visitor_key_clean = (visitor_key or "").strip()
+    has_visitor_key = bool(visitor_key_clean)
+    visitor_key_valid = _is_plausible_anthropic_key(visitor_key_clean)
+    can_run = has_visitor_key and visitor_key_valid
+
+    # Mode pill — only shows live when key is valid; otherwise stays gray.
+    if can_run:
+        active_mode = "real"
         mode_pill = '<span class="aml-pill aml-pill-green">live · session key</span>'
-    elif active_mode == "real":
-        mode_pill = '<span class="aml-pill aml-pill-green">live · default key</span>'
+    elif has_visitor_key and not visitor_key_valid:
+        active_mode = "mock"
+        mode_pill = '<span class="aml-pill aml-pill-red">invalid key</span>'
     else:
-        mode_pill = '<span class="aml-pill aml-pill-gray">mock</span>'
-    st.markdown(f"**Mode** &nbsp; {mode_pill}", unsafe_allow_html=True)
+        active_mode = "mock"
+        mode_pill = '<span class="aml-pill aml-pill-gray">awaiting key</span>'
+
+    st.markdown(f"**Status** &nbsp; {mode_pill}", unsafe_allow_html=True)
     st.markdown(
         f'<div class="aml-mono" style="color: var(--c-text-muted); margin-top: 4px;">{llm_cfg.model}</div>',
         unsafe_allow_html=True,
     )
+
+    # Show appropriate callout based on state.
+    if has_visitor_key and not visitor_key_valid:
+        st.markdown(
+            '<div class="aml-byok-callout" style="background: #fcebeb; '
+            'border-color: #f0bcbc; color: #791f1f;">'
+            '<strong>Key format not recognized.</strong><br>'
+            'Anthropic keys start with <code>sk-ant-</code> and are ~100 '
+            'characters long. Double-check the value pasted above, or get '
+            'a new one at <a href="https://console.anthropic.com/" '
+            'target="_blank" style="color: #791f1f;">console.anthropic.com</a>.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    elif not has_visitor_key:
+        st.markdown(
+            '<div class="aml-byok-callout">'
+            '<strong>API key required.</strong><br>'
+            'This demo uses your own Anthropic API key for LLM-written SAR '
+            'narratives. The key is per-session only — never stored, never '
+            'logged. Sanctions / adverse-media / KYB integrations use '
+            'server-side keys, so you\'ll see real data either way once a '
+            'key is provided.<br><br>'
+            'Get a free key at <a href="https://console.anthropic.com/" '
+            'target="_blank">console.anthropic.com</a>.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
     st.markdown('<div class="aml-label">External integrations</div>', unsafe_allow_html=True)
@@ -513,11 +570,11 @@ except FileNotFoundError as e:
 
 
 # ---------------------------------------------------------------------------
-# Top brand strip — gives the page a "this is a real product" header
+# Top brand strip
 # ---------------------------------------------------------------------------
 
-mode_dot_color = "#1d9e75" if active_mode == "real" else "#888780"
-mode_label = "Live LLM" if active_mode == "real" else "Mock mode"
+mode_dot_color = "#1d9e75" if can_run else "#888780"
+mode_label = "Live LLM" if can_run else "Awaiting API key"
 
 st.markdown(f"""
 <div class="aml-brand">
@@ -533,7 +590,7 @@ st.markdown(f"""
 
 
 # ---------------------------------------------------------------------------
-# Account picker row
+# Account picker row — visible always, but Run button disabled until key is set
 # ---------------------------------------------------------------------------
 
 laundering_accounts = df[df["is_laundering"] == 1].groupby(
@@ -551,25 +608,75 @@ with col_pick:
         picker_options,
         index=1 if len(picker_options) > 1 else 0,
         label_visibility="collapsed",
+        disabled=not can_run,
     )
 with col_manual:
     manual = st.text_input(
         "Manual account ID",
         placeholder="or paste account ID",
         label_visibility="collapsed",
+        disabled=not can_run,
     )
 with col_btn:
-    run_clicked = st.button("Run investigation", type="primary",
-                            use_container_width=True)
+    button_label = "Run investigation" if can_run else "🔒 Add API key"
+    run_clicked = st.button(
+        button_label,
+        type="primary",
+        use_container_width=True,
+        disabled=not can_run,
+    )
 
 target_account = manual.strip() or (picked if picked not in {"—", "———"} else "")
 
 
 # ---------------------------------------------------------------------------
-# Investigation results
+# Main panel — gate, empty state, or investigation results
 # ---------------------------------------------------------------------------
 
-if not target_account:
+if not can_run:
+    # Gated state — no key (or invalid) → show the gate card.
+    if has_visitor_key and not visitor_key_valid:
+        gate_subtext = (
+            "The key you entered doesn\u2019t look like a valid Anthropic key. "
+            "Anthropic keys start with <code>sk-ant-</code> and are about 100 "
+            "characters. Double-check the value in the sidebar, then we\u2019re "
+            "good to go."
+        )
+        gate_arrow_html = (
+            '<div class="aml-gate-error">'
+            '\u26A0\uFE0F Invalid key format \u2014 see sidebar'
+            '</div>'
+        )
+    else:
+        gate_subtext = (
+            "Enter your own Anthropic API key in the sidebar to start "
+            "running investigations. The key is per-session only and is never "
+            "stored or logged. Sanctions, PEP, adverse-media, and KYB lookups "
+            "still use real production APIs (OpenSanctions, Tavily, GLEIF) \u2014 "
+            "your key only powers the LLM-written SAR narratives."
+        )
+        gate_arrow_html = (
+            '<div class="aml-gate-arrow">'
+            '\u2190 Paste your key in the sidebar'
+            '</div>'
+        )
+
+    st.markdown(f"""
+<div class="aml-gate-card">
+  <div class="aml-gate-icon">A</div>
+  <div class="aml-gate-title">Bring your own Anthropic API key</div>
+  <div class="aml-gate-sub">{gate_subtext}</div>
+  {gate_arrow_html}
+  <div class="aml-gate-hint">
+    Don\u2019t have one? Sign up free at
+    <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
+    and create a key. Takes about 2 minutes.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+elif not target_account:
+    # Has key, but hasn't picked an account yet.
     st.markdown(
         '<div class="aml-card" style="text-align: center; color: var(--c-text-muted); '
         'padding: 40px 32px; font-size: 13px;">'
@@ -579,6 +686,7 @@ if not target_account:
         '</div>',
         unsafe_allow_html=True,
     )
+
 elif run_clicked or st.session_state.get("_last_account") == target_account:
     st.session_state["_last_account"] = target_account
 
@@ -586,7 +694,7 @@ elif run_clicked or st.session_state.get("_last_account") == target_account:
         final_state = run_with_cache(
             account=target_account,
             store=store,
-            api_key=visitor_key or None,
+            api_key=visitor_key_clean or None,
         )
 
     sar = final_state["sar"]
@@ -732,7 +840,6 @@ elif run_clicked or st.session_state.get("_last_account") == target_account:
             st.json(txn.structuring_events, expanded=False)
 
     with tab_ent:
-        # 5 metrics: KYC | Sanctions | PEP | Adverse Media | Geo Risk
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("KYC", ent.kyc_status)
         c2.metric("Sanctions", len(ent.sanctions_hits))
@@ -740,7 +847,6 @@ elif run_clicked or st.session_state.get("_last_account") == target_account:
         c4.metric("Adverse media", len(ent.adverse_media_hits))
         c5.metric("Geo risk", f"{ent.geo_risk_score:.2f}")
 
-        # Entity-type subline
         entity_type = getattr(ent, "entity_type", "individual")
         lei_records = getattr(ent, "lei_records", []) or []
         if entity_type == "corporate":
@@ -837,7 +943,6 @@ elif run_clicked or st.session_state.get("_last_account") == target_account:
             unsafe_allow_html=True,
         )
 
-    # ---- Footer governance bar ------------------------------------------
     st.markdown("""
 <div class="aml-footer">
   <span class="aml-dot aml-dot-amber"></span>
@@ -849,7 +954,7 @@ elif run_clicked or st.session_state.get("_last_account") == target_account:
 
 
 # ---------------------------------------------------------------------------
-# Bottom: collapsed dataset and how-it-works panels
+# Bottom: collapsed dataset and how-it-works panels (always visible)
 # ---------------------------------------------------------------------------
 
 st.markdown("<br>", unsafe_allow_html=True)
