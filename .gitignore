@@ -21,3 +21,6 @@ artifacts/*.json
 .idea/
 .vscode/
 .DS_Store
+
+/test_*.py
+/find_*.py
