@@ -1,9 +1,13 @@
-"""IBM AML (NeurIPS 2023) dataset loader, with synthetic fallback.
+"""IBM AML (NeurIPS 2023) dataset loader, with HF auto-download + synthetic fallback.
 
-Primary path: load `HI-Small_Trans.csv` from Kaggle dataset
-  ealtman2019/ibm-transactions-for-anti-money-laundering-aml
+Loading strategy (in order):
+  1. Local file present at `data/raw/HI-Small_Trans.csv` → read directly
+  2. Hugging Face Datasets mirror → download once, cache in HF cache dir, read
+  3. Synthetic fallback → tiny fake dataset for tests / offline demo
 
-Fallback: a small synthetic generator so tests and CI run without the dataset.
+The HF mirror lives at `srinayani123/ibm-aml-mirror` and is a verbatim copy of
+the IBM HI-Small dataset (Altman et al., NeurIPS 2023). It exists only to make
+Streamlit Cloud deployment work — the original dataset is too large for git.
 
 Schema (canonical, used everywhere downstream):
   - timestamp     : datetime
@@ -31,11 +35,19 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# IBM AML dataset
+# Hugging Face mirror configuration
 # ---------------------------------------------------------------------------
 
-# Currency conversion table — IBM AML uses multiple currencies, normalize to USD.
-# Approximate mid-2022 rates (when the dataset was published).
+# Set HF_REPO_ID = None (or empty string) to disable HF download attempts —
+# useful for fully-offline development.
+HF_REPO_ID = "srinayani123/ibm-aml-mirror"
+HF_REPO_TYPE = "dataset"
+
+
+# ---------------------------------------------------------------------------
+# IBM AML dataset — currency normalization
+# ---------------------------------------------------------------------------
+
 USD_RATES = {
     "US Dollar": 1.0, "Euro": 1.05, "UK Pound": 1.20, "Yuan": 0.14,
     "Yen": 0.0070, "Bitcoin": 30_000.0, "Australian Dollar": 0.66,
@@ -45,8 +57,65 @@ USD_RATES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Resolve the file path: local first, then HF download, then None
+# ---------------------------------------------------------------------------
+
+def _try_hf_download(filename: str) -> Optional[Path]:
+    """Download `filename` from the HF mirror. Returns the cached local path
+    on success, or None if HF is unreachable / disabled / the file is missing.
+
+    huggingface_hub caches downloads in ~/.cache/huggingface/ by default, so
+    subsequent calls with the same filename are instant (no re-download).
+    """
+    if not HF_REPO_ID:
+        return None
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        logger.warning(
+            "huggingface_hub not installed; cannot download dataset. "
+            "Add `huggingface_hub` to requirements.txt to enable."
+        )
+        return None
+
+    try:
+        logger.info("Downloading %s from HF mirror %s ...",
+                    filename, HF_REPO_ID)
+        path_str = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename=filename,
+            repo_type=HF_REPO_TYPE,
+        )
+        logger.info("Downloaded %s → %s", filename, path_str)
+        return Path(path_str)
+    except Exception as e:
+        logger.warning("HF download failed for %s: %s", filename, e)
+        return None
+
+
+def _resolve_transactions_path() -> Optional[Path]:
+    """Return a usable path to the transactions CSV, or None if unavailable."""
+    local = RAW_DIR / data_cfg.transactions_file
+    if local.exists():
+        return local
+    return _try_hf_download(data_cfg.transactions_file)
+
+
+def _resolve_patterns_path() -> Optional[Path]:
+    local = RAW_DIR / data_cfg.patterns_file
+    if local.exists():
+        return local
+    return _try_hf_download(data_cfg.patterns_file)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def ibm_aml_available() -> bool:
-    return (RAW_DIR / data_cfg.transactions_file).exists()
+    """True if the dataset can be loaded — either locally or via HF download."""
+    return _resolve_transactions_path() is not None
 
 
 def load_ibm_aml(max_rows: Optional[int] = None) -> pd.DataFrame:
@@ -55,11 +124,11 @@ def load_ibm_aml(max_rows: Optional[int] = None) -> pd.DataFrame:
     For demo purposes we keep at most `max_rows` (default 500k) — but we
     intentionally keep ALL laundering rows so the agents have signal.
     """
-    txn_path = RAW_DIR / data_cfg.transactions_file
-    if not txn_path.exists():
+    txn_path = _resolve_transactions_path()
+    if txn_path is None:
         raise FileNotFoundError(
-            f"IBM AML file not found at {txn_path}. "
-            f"Drop {data_cfg.transactions_file} into data/raw/. "
+            f"IBM AML file not found locally at {RAW_DIR / data_cfg.transactions_file} "
+            f"and HF mirror {HF_REPO_ID} is unreachable. "
             f"See data/raw/PUT_DATA_HERE.md for instructions."
         )
 
@@ -121,8 +190,8 @@ def load_ibm_aml(max_rows: Optional[int] = None) -> pd.DataFrame:
 
 def load_patterns_doc() -> str:
     """Load the patterns description file (typology ground truth)."""
-    p = RAW_DIR / data_cfg.patterns_file
-    if p.exists():
+    p = _resolve_patterns_path()
+    if p is not None and p.exists():
         return p.read_text(errors="replace")
     return "(Patterns file not available — see data/raw/PUT_DATA_HERE.md.)"
 
@@ -202,11 +271,14 @@ def generate_synthetic(n_accounts: int = 200,
 
 def load_data(use_synthetic_if_missing: bool = True,
               max_rows: Optional[int] = None) -> pd.DataFrame:
-    """Top-level loader. Tries IBM AML first, falls back to synthetic."""
+    """Top-level loader.
+
+    Tries (in order): local file → HF download → synthetic fallback.
+    """
     max_rows = max_rows or data_cfg.max_rows_in_memory
     if ibm_aml_available():
         return load_ibm_aml(max_rows=max_rows)
     if use_synthetic_if_missing:
-        logger.warning("IBM AML files not found — using synthetic fallback.")
+        logger.warning("IBM AML files not available (local or HF) — using synthetic fallback.")
         return generate_synthetic()
-    raise FileNotFoundError("IBM AML files not found in data/raw/.")
+    raise FileNotFoundError("IBM AML files not available locally or via HF mirror.")
