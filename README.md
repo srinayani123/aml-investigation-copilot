@@ -4,7 +4,7 @@ Multi-agent system for investigating flagged accounts and drafting Suspicious Ac
 
 Four LangGraph agents — Transaction Investigator, Entity Resolver, Network Analyst, SAR Drafter — fan out in parallel and converge on a final score plus FinCEN-style narrative. The Entity Resolver hits four real public APIs with graceful mock fallback. KYC is intentionally simulated as a bank-internal CIF lookup.
 
-![alt text](image.png)
+![alt text](docs/screenshots/01-decision-strip.png)
 
 ## Demo
 
@@ -29,7 +29,7 @@ Given a flagged account, produces:
 
 The risk score is fully deterministic — each detected pattern adds a fixed contribution. The LLM writes prose only; it never moves the score.
 
-![alt text](image-1.png)
+![alt text](docs/screenshots/02-entity-tab.png)
 
 ## External integrations
 
@@ -43,7 +43,7 @@ The risk score is fully deterministic — each detected pattern adds a fixed con
 
 **Why KYC is mocked.** At investigation time, KYC is a CIF (Customer Information File) lookup of previously-collected onboarding data — not a fresh document/selfie verification. Public KYC APIs (Onfido, Sumsub, Didit) operate on real document images at onboarding, not on synthetic dataset accounts. The mock simulates the CIF response shape; replacing it means swapping in a bank's internal CIF service over mTLS — no agent logic changes.
 
-![alt text](image-2.png)
+![alt text](aml_copilot/docs/screenshots/03-sar-draft.png)
 
 ## Running locally
 
