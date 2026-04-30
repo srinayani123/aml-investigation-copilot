@@ -8,7 +8,7 @@ Four LangGraph agents — Transaction Investigator, Entity Resolver, Network Ana
 
 ## Demo
 
-[**Live demo →**](https://your-deploy-url.streamlit.app)  *(replace with your Streamlit Cloud URL)*
+[**Live demo →**](https://aml-copilot-srinayani.streamlit.app)
 
 Try investigating these accounts:
 
